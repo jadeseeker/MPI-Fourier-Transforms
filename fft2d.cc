@@ -57,13 +57,13 @@ void Transform2D(const char* inputFN)
   // 4) Obtain a pointer to the Complex 1d array of input data
   int startRow;
   startRow = imgHeight * rank / numtasks;
-  printf("\nstartrow:%d", startRow);
+  //printf("\nstartrow:%d", startRow);
   int offset;
 
   for (int i=0; i<imgHeight/numtasks; i++){
     offset = imgWidth*(startRow+i);
-    printf("\noffset:%d", offset);
-    Transform1D(imgData + offset, imgWidth, H);
+    //printf("\noffset:%d", offset);
+    Transform1D(imgData + offset, imgWidth, H + imgWidth*i);
 
   }
 
@@ -93,16 +93,16 @@ void Transform1D(Complex* h, int w, Complex* H)
   // data, w is the width (N), and H is the output array.
   //cout<<"\nimage data: "<< h <<"\n";
 
-  Complex sum = (0,0);
+  Complex sum = Complex(0,0);
   Complex W;
 
   for(int n = 0; n<w; n++){
     for(int k = 0; k<w; k++){
-      W = Complex(+cos(2* M_PI* n* k/ w), -sin(2* M_PI* n* k/ w));
-      sum += W*h[k];
+      W = Complex(+cos(2 * M_PI * n * k / w), -sin(2 * M_PI * n * k / w));
+      sum = sum + W * h[k];
     }
     H[n] = sum;
-    sum = (0,0);
+    sum = Complex(0,0);
     cout <<"\n" << H[n].Mag();
   }
 }
