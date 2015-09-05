@@ -17,6 +17,8 @@
 
 using namespace std;
 
+void Transform1D(Complex* h, int w, Complex* H);
+
 
 void Transform2D(const char* inputFN) 
 { 
@@ -42,12 +44,32 @@ void Transform2D(const char* inputFN)
   MPI_Comm_size(MPI_COMM_WORLD, &numtasks);
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
-  printf("\nTasks:%d\tRank:%d\n", numtasks, rank);
+  //printf("\nTasks:%d\tRank:%d\n", numtasks, rank);
 
 
   // 3) Allocate an array of Complex object of sufficient size to
   //    hold the 2d DFT results (size is width * height)
+  Complex *H;
+
+  H = new Complex[imgWidth * imgHeight];
+
+
   // 4) Obtain a pointer to the Complex 1d array of input data
+  int startRow;
+  startRow = imgHeight * rank / numtasks;
+  printf("\nstartrow:%d", startRow);
+  int offset;
+
+  for (int i=0; i<imgHeight/numtasks; i++){
+    offset = imgWidth*(startRow+i);
+    printf("\noffset:%d", offset);
+    Transform1D(imgData + offset, imgWidth, H);
+
+  }
+
+
+
+
   // 5) Do the individual 1D transforms on the rows assigned to your CPU
   // 6) Send the resultant transformed values to the appropriate
   //    other processors for the next phase.
@@ -69,6 +91,20 @@ void Transform1D(Complex* h, int w, Complex* H)
   // Implement a simple 1-d DFT using the double summation equation
   // given in the assignment handout.  h is the time-domain input
   // data, w is the width (N), and H is the output array.
+  //cout<<"\nimage data: "<< h <<"\n";
+
+  Complex sum = (0,0);
+  Complex W;
+
+  for(int n = 0; n<w; n++){
+    for(int k = 0; k<w; k++){
+      W = Complex(+cos(2* M_PI* n* k/ w), -sin(2* M_PI* n* k/ w));
+      sum += W*h[k];
+    }
+    H[n] = sum;
+    sum = (0,0);
+    cout <<"\n" << H[n].Mag();
+  }
 }
 
 int main(int argc, char** argv)
