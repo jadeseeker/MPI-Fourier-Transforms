@@ -19,6 +19,29 @@ using namespace std;
 
 void Transform1D(Complex* h, int w, Complex* H);
 
+void gather(Complex* buff, int numtasks, int rank, int sz)
+{
+  int rc;
+  //Send the computed values from all the other ranks to rank 0.
+  if(rank != 0)
+  {
+    Complex* sendBuff = buff;
+    MPI_Request request;
+    rc = MPI_Isend(sendBuff, sz*2/numtasks, MPI_COMPLEX, 0, 0, MPI_COMM_WORLD, &request);
+  }
+
+  //Rank 0 will receive blocks of 1D Transform data from other ranks.
+  if(rank == 0)
+  {
+    for(int i = 1; i<numtasks; i++)
+    {
+      Complex* recBuff = buff+sz*i/numtasks;
+      MPI_Status status;
+      rc = MPI_Recv(recBuff, sz*2/numtasks, MPI_COMPLEX, i, 0, MPI_COMM_WORLD, &status);
+    }
+  }
+}
+
 
 void Transform2D(const char* inputFN) 
 { 
@@ -60,17 +83,46 @@ void Transform2D(const char* inputFN)
   //printf("\nstartrow:%d", startRow);
   int offset;
 
+  // 5) Do the individual 1D transforms on the rows assigned to your CPU
+
   for (int i=0; i<imgHeight/numtasks; i++){
     offset = imgWidth*(startRow+i);
     //printf("\noffset:%d", offset);
-    Transform1D(imgData + offset, imgWidth, H + imgWidth*i);
+    Transform1D(imgData + offset, imgWidth, H + imgWidth * i);
+  }
 
+  //Now, Master CPU will gather data from the rest of the CPUs.
+  //gather(H, numtasks, rank, imgWidth*imgHeight);
+
+  int rc;
+  //Send the computed values from all the other ranks to rank 0.
+  if(rank != 0)
+  {
+    Complex* sendBuff = buff;
+    MPI_Request request;
+    rc = MPI_Isend(sendBuff, imgHeight*imgWidth*2/numtasks, MPI_COMPLEX, 0, 0, MPI_COMM_WORLD, &request);
+  }
+
+  //Rank 0 will receive blocks of 1D Transform data from other ranks.
+  if(rank == 0)
+  {
+    for(int i = 1; i<numtasks; i++)
+    {
+      Complex* recBuff = buff+imgHeight*imgWidth*i/numtasks;
+      MPI_Status status;
+      rc = MPI_Recv(recBuff, imgHeight*imgWidth*2/numtasks, MPI_COMPLEX, i, 0, MPI_COMM_WORLD, &status);
+    }
+  }
+
+
+  if(rank == 0)
+  {
+    cout<<"Generating Image File MyAfter1d.txt"<<endl;
+    image.SaveImageData("MyAfter1d.txt", H, imgWidth, imgHeight);
   }
 
 
 
-
-  // 5) Do the individual 1D transforms on the rows assigned to your CPU
   // 6) Send the resultant transformed values to the appropriate
   //    other processors for the next phase.
   // 6a) To send and receive columns, you might need a separate
@@ -98,7 +150,7 @@ void Transform1D(Complex* h, int w, Complex* H)
 
   for(int n = 0; n<w; n++){
     for(int k = 0; k<w; k++){
-      W = Complex(+cos(2 * M_PI * n * k / w), -sin(2 * M_PI * n * k / w));
+      W = Complex( +cos(2 * M_PI * n * k / w), -sin(2 * M_PI * n * k / w) );
       sum = sum + W * h[k];
     }
     H[n] = sum;
