@@ -19,28 +19,72 @@ using namespace std;
 
 void Transform1D(Complex* h, int w, Complex* H);
 
-void gather(Complex* buff, int numtasks, int rank, int sz)
+void TxRx(Complex* H, int numtasks, int rank, int size, int flag)
 {
   int rc;
-  //Send the computed values from all the other ranks to rank 0.
-  if(rank != 0)
-  {
-    Complex* sendBuff = buff;
-    MPI_Request request;
-    rc = MPI_Isend(sendBuff, sz*2/numtasks, MPI_COMPLEX, 0, 0, MPI_COMM_WORLD, &request);
-  }
-
-  //Rank 0 will receive blocks of 1D Transform data from other ranks.
-  if(rank == 0)
-  {
-    for(int i = 1; i<numtasks; i++)
+  
+  // Reciever at 0
+  if(flag == 0){
+    //Send the computed values from all the other ranks to rank 0.
+    if(rank != 0)
     {
-      Complex* recBuff = buff+sz*i/numtasks;
+      Complex* sendBuff = H;
+      MPI_Request request;
+      rc = MPI_Isend(sendBuff, size*2/numtasks, MPI_COMPLEX, 0, 0, MPI_COMM_WORLD, &request);
+    }
+
+    //Rank 0 will receive blocks of 1D Transform data from other ranks.
+    if(rank == 0)
+    {
+      for(int i = 1; i<numtasks; i++)
+      {
+        Complex* recBuff = H+size*i/numtasks;
+        MPI_Status status;
+        rc = MPI_Recv(recBuff, size*2/numtasks, MPI_COMPLEX, i, 0, MPI_COMM_WORLD, &status);
+      }
+    }
+  }
+  
+  //Transmitter at 0
+  if(flag == 1){
+    //Send values to all other ranks from rank0
+    if(rank == 0)
+    {
+      for(int i = 1; i<numtasks; i++)
+      {
+        Complex* sendBuff = H;  
+        MPI_Request request;
+        rc = MPI_Isend(sendBuff, size*2, MPI_COMPLEX, i, 0, MPI_COMM_WORLD, &request);
+      }
+    }
+    //All ranks recieve values from rank0
+    if(rank != 0)
+    {
+      Complex* recBuff = H;
       MPI_Status status;
-      rc = MPI_Recv(recBuff, sz*2/numtasks, MPI_COMPLEX, i, 0, MPI_COMM_WORLD, &status);
+      rc = MPI_Recv(recBuff, size*2, MPI_COMPLEX, 0, 0, MPI_COMM_WORLD, &status);
     }
   }
 }
+
+
+void transpose(Complex* in, Complex* out, int w, int h, int rank)
+{
+  if(rank == 0)
+  {
+    //Calculating the transpose.
+    int pos = 0;
+    for(int i = 0; i<h; i++)
+    {
+      for(int j = 0; j<w; j++)
+      {
+        out[pos] = in[i + j * w];
+        pos++;
+      }
+    }
+  }
+}
+
 
 
 void Transform2D(const char* inputFN) 
@@ -92,28 +136,7 @@ void Transform2D(const char* inputFN)
   }
 
   //Now, Master CPU will gather data from the rest of the CPUs.
-  //gather(H, numtasks, rank, imgWidth*imgHeight);
-
-  int rc;
-  //Send the computed values from all the other ranks to rank 0.
-  if(rank != 0)
-  {
-    Complex* sendBuff = buff;
-    MPI_Request request;
-    rc = MPI_Isend(sendBuff, imgHeight*imgWidth*2/numtasks, MPI_COMPLEX, 0, 0, MPI_COMM_WORLD, &request);
-  }
-
-  //Rank 0 will receive blocks of 1D Transform data from other ranks.
-  if(rank == 0)
-  {
-    for(int i = 1; i<numtasks; i++)
-    {
-      Complex* recBuff = buff+imgHeight*imgWidth*i/numtasks;
-      MPI_Status status;
-      rc = MPI_Recv(recBuff, imgHeight*imgWidth*2/numtasks, MPI_COMPLEX, i, 0, MPI_COMM_WORLD, &status);
-    }
-  }
-
+  TxRx(H, numtasks, rank, imgWidth*imgHeight, 0);
 
   if(rank == 0)
   {
@@ -121,22 +144,51 @@ void Transform2D(const char* inputFN)
     image.SaveImageData("MyAfter1d.txt", H, imgWidth, imgHeight);
   }
 
-
-
   // 6) Send the resultant transformed values to the appropriate
   //    other processors for the next phase.
   // 6a) To send and receive columns, you might need a separate
   //     Complex array of the correct size.
+
+  Complex tpose[imgHeight * imgWidth];
+  transpose(H, tpose, imgWidth, imgHeight, rank);
+
+
+  TxRx(tpose, numtasks, rank, imgWidth*imgHeight, 1);
+
+  Complex* after2D = new Complex[imgHeight*imgWidth];
+  startRow = imgHeight*rank/numtasks;
+  
+  for(int i=0; i<imgHeight/numtasks; i++)
+  {
+    offset = imgWidth*(startRow + i);
+    Transform1D(tpose + offset, imgWidth, after2D + imgWidth*i);
+  }
+
+  //Now, Master CPU will gather data from the rest of the CPUs.
+  TxRx(after2D, numtasks, rank, imgHeight*imgWidth, 0);
+
+  Complex tpose2D[imgWidth*imgHeight];
+
+  transpose(after2D, tpose2D, imgWidth, imgHeight, rank);
+  
+  if(rank == 0)
+  {
+    cout<<"Generating Image File MyAfter2d.txt"<<endl;
+    image.SaveImageData("MyAfter2d.txt", tpose2D, imgWidth, imgHeight);
+  }
+  
+
+
+
   // 7) Receive messages from other processes to collect your columns
   // 8) When all columns received, do the 1D transforms on the columns
   // 9) Send final answers to CPU 0 (unless you are CPU 0)
   //   9a) If you are CPU 0, collect all values from other processors
   //       and print out with SaveImageData().
 
-  //InputImage image(inputFN);  // Create the helper object for reading the image
-  // Step (1) in the comments is the line above.
-  // Your code here, steps 2-9
 }
+
+
 
 void Transform1D(Complex* h, int w, Complex* H)
 {
@@ -158,6 +210,8 @@ void Transform1D(Complex* h, int w, Complex* H)
     cout <<"\n" << H[n].Mag();
   }
 }
+
+
 
 int main(int argc, char** argv)
 {
