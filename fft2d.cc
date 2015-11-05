@@ -19,7 +19,10 @@ using namespace std;
 
 void Transform1D(Complex* h, int w, Complex* H);
 
-void TxRx(Complex* H, int numtasks, int rank, int size, int flag)
+
+
+//gather:flag=0  scatter:flag=1
+void ScatterGather(Complex* H, int numtasks, int rank, int size, int flag)
 {
   int rc;
   
@@ -87,14 +90,100 @@ void transpose(Complex* in, Complex* out, int w, int h, int rank)
 
 
 
+void Inverser1D(Complex* h, int w, Complex* H)
+{
+
+  //cout<< "in inverse1d" << endl;
+
+  Complex sum = Complex(0,0);
+  Complex W;
+
+  for(int n = 0; n<w; n++){
+    for(int k = 0; k<w; k++){
+      W = Complex( +cos(2 * M_PI * n * k / w), +sin(2 * M_PI * n * k / w) );
+      sum = sum + W * h[k];
+    }
+    H[n] = sum;
+    H[n].real = H[n].real/w;
+    H[n].imag = H[n].imag/w;
+    sum = Complex(0,0);
+    //cout <<"\n" << H[n].Mag();
+  }
+}
+
+
+
+void comp1d(Complex* data, Complex* H, int imgWidth, int imgHeight, int rank, int numtasks, int flag)
+{
+  int startRow, offset;
+  startRow = imgHeight * rank / numtasks;
+
+  //COMPUTING 1D TRANSFORM
+  for (int i=0; i < imgHeight / numtasks; i++){
+    offset = imgWidth * (startRow + i);
+    if(flag == 0){
+      Transform1D(data + offset, imgWidth, H + imgWidth * i);
+    }
+    else{
+      Inverser1D(data + offset, imgWidth, H + imgWidth * i);
+    }
+  }
+}
+
+
+
+void t1d(Complex* data, Complex* H, int imgWidth, int imgHeight, int rank, int numtasks, int flag)
+{
+  //scatter
+  ScatterGather(data, numtasks, rank, imgWidth * imgHeight, 1);
+
+  comp1d(data, H, imgWidth, imgHeight, rank, numtasks, flag);
+
+  // GATEHER
+  ScatterGather(H, numtasks, rank, imgWidth*imgHeight, 0);
+}
+
+
+
+void t2d(Complex* H, Complex* out, int imgWidth, int imgHeight, int rank, int numtasks, int flag)
+{
+  Complex tpose[imgHeight * imgWidth];
+
+  transpose(H, tpose, imgWidth, imgHeight, rank);
+  t1d(tpose, H, imgWidth, imgHeight, rank, numtasks, flag);
+  transpose(H, out, imgWidth, imgHeight, rank);
+}
+
+
+
+
+
 void Transform2D(const char* inputFN) 
 { 
 
   // Do the 2D transform here.
-  
   // 1) Use the InputImage object to read in the Tower.txt file and
   //    find the width/height of the input image.
-  InputImage image(inputFN);
+  // 2) Use MPI to find how many CPUs in total, and which one
+  //    this process is
+  // 3) Allocate an array of Complex object of sufficient size to
+  //    hold the 2d DFT results (size is width * height)
+  // 4) Obtain a pointer to the Complex 1d array of input data
+  // 5) Do the individual 1D transforms on the rows assigned to your CPU
+  // 6) Send the resultant transformed values to the appropriate
+  //    other processors for the next phase.
+  // 6a) To send and receive columns, you might need a separate
+  //     Complex array of the correct size.
+  // 7) Receive messages from other processes to collect your columns
+  // 8) When all columns received, do the 1D transforms on the columns
+  // 9) Send final answers to CPU 0 (unless you are CPU 0)
+  //   9a) If you are CPU 0, collect all values from other processors
+  //       and print out with SaveImageData().
+  InputImage image(inputFN);  // Create the helper object for reading the image
+  // Step (1) in the comments is the line above.
+  // Your code here, steps 2-9
+
+  //InputImage image(inputFN);
   int imgHeight, imgWidth;
   Complex *imgData;
 
@@ -102,41 +191,18 @@ void Transform2D(const char* inputFN)
   imgWidth = image.GetWidth();
   imgData = image.GetImageData();
 
-  printf("\nImage height:%d\tWidth:%d\n", imgHeight, imgWidth);
-
-  // 2) Use MPI to find how many CPUs in total, and which one
-  //    this process is
   int numtasks, rank;
 
   MPI_Comm_size(MPI_COMM_WORLD, &numtasks);
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
-  //printf("\nTasks:%d\tRank:%d\n", numtasks, rank);
 
-
-  // 3) Allocate an array of Complex object of sufficient size to
-  //    hold the 2d DFT results (size is width * height)
   Complex *H;
-
   H = new Complex[imgWidth * imgHeight];
 
+  // COMPUTING 1D TRANSFORM
+  t1d(imgData, H, imgWidth, imgHeight, rank, numtasks, 0);
 
-  // 4) Obtain a pointer to the Complex 1d array of input data
-  int startRow;
-  startRow = imgHeight * rank / numtasks;
-  //printf("\nstartrow:%d", startRow);
-  int offset;
-
-  // 5) Do the individual 1D transforms on the rows assigned to your CPU
-
-  for (int i=0; i<imgHeight/numtasks; i++){
-    offset = imgWidth*(startRow+i);
-    //printf("\noffset:%d", offset);
-    Transform1D(imgData + offset, imgWidth, H + imgWidth * i);
-  }
-
-  //Now, Master CPU will gather data from the rest of the CPUs.
-  TxRx(H, numtasks, rank, imgWidth*imgHeight, 0);
 
   if(rank == 0)
   {
@@ -144,47 +210,34 @@ void Transform2D(const char* inputFN)
     image.SaveImageData("MyAfter1d.txt", H, imgWidth, imgHeight);
   }
 
-  // 6) Send the resultant transformed values to the appropriate
-  //    other processors for the next phase.
-  // 6a) To send and receive columns, you might need a separate
-  //     Complex array of the correct size.
+  // COMPUTING 2D TRANFORM
 
-  Complex tpose[imgHeight * imgWidth];
-  transpose(H, tpose, imgWidth, imgHeight, rank);
+  Complex* H2D = new Complex[imgHeight * imgWidth];
 
-
-  TxRx(tpose, numtasks, rank, imgWidth*imgHeight, 1);
-
-  Complex* after2D = new Complex[imgHeight*imgWidth];
-  startRow = imgHeight*rank/numtasks;
-  
-  for(int i=0; i<imgHeight/numtasks; i++)
-  {
-    offset = imgWidth*(startRow + i);
-    Transform1D(tpose + offset, imgWidth, after2D + imgWidth*i);
-  }
-
-  //Now, Master CPU will gather data from the rest of the CPUs.
-  TxRx(after2D, numtasks, rank, imgHeight*imgWidth, 0);
-
-  Complex tpose2D[imgWidth*imgHeight];
-
-  transpose(after2D, tpose2D, imgWidth, imgHeight, rank);
+  t2d(H, H2D, imgWidth, imgHeight, rank, numtasks, 0);
   
   if(rank == 0)
   {
     cout<<"Generating Image File MyAfter2d.txt"<<endl;
-    image.SaveImageData("MyAfter2d.txt", tpose2D, imgWidth, imgHeight);
+    image.SaveImageData("MyAfter2d.txt", H2D, imgWidth, imgHeight);
   }
+
+  // COMPUTING INVERSE TRANFORM
+
+  Complex* IH = new Complex[imgHeight * imgWidth];
   
+  // flag set to 1 for inverse transform
+  t2d(H2D, IH, imgWidth, imgHeight, rank, numtasks, 1);
+  t1d(IH, H, imgWidth, imgHeight, rank, numtasks, 1);
 
+  //t1d(H2D, IH, imgWidth, imgHeight, rank, numtasks, 1);
+  //t2d(IH, H, imgWidth, imgHeight, rank, numtasks, 1);
 
-
-  // 7) Receive messages from other processes to collect your columns
-  // 8) When all columns received, do the 1D transforms on the columns
-  // 9) Send final answers to CPU 0 (unless you are CPU 0)
-  //   9a) If you are CPU 0, collect all values from other processors
-  //       and print out with SaveImageData().
+  if(rank == 0)
+  {
+    cout<<"Generating Image File MyAfterInverse.txt"<<endl;
+    image.SaveImageData("MyAfterInverse.txt", H, imgWidth, imgHeight);
+  }
 
 }
 
@@ -207,7 +260,7 @@ void Transform1D(Complex* h, int w, Complex* H)
     }
     H[n] = sum;
     sum = Complex(0,0);
-    cout <<"\n" << H[n].Mag();
+    //cout <<"\n" << H[n].Mag();
   }
 }
 
